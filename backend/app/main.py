@@ -1,97 +1,151 @@
+from __future__ import annotations
+
 import os
-import tempfile
+import sys
 from pathlib import Path
-from typing import Optional
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from PIL import Image
 
-from audio.extract_audio import extract_audio
-from audio.load_audio import load_audio
-from config import DEVICE, MODEL_PATH, SAMPLE_RATE
-from inference.pipeline import StutterPipeline
+# ---------------------------------------------------------------------
+# Make backend importable
+# ---------------------------------------------------------------------
+
+CURRENT_DIR = Path(__file__).resolve().parent
+BACKEND_DIR = CURRENT_DIR.parent
+
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+
+    # ---------------------------------------------------------------------
+    # Project imports
+    # ---------------------------------------------------------------------
+
+from app.config import (
+    DEVICE,
+    MODEL_PATH,
+    SUPPORTED_IMAGE_FORMATS,
+)
+
+from inference.pipeline import InferencePipeline
 from models.final_model import load_model
 
+# ---------------------------------------------------------------------
+# FastAPI
+# ---------------------------------------------------------------------
 
-BACKEND_ROOT = Path(__file__).resolve().parents[1]
-MODEL_ABS_PATH = str((BACKEND_ROOT / MODEL_PATH).resolve())
-
-
-def _is_video(path: str) -> bool:
-    ext = Path(path).suffix.lower().lstrip(".")
-    return ext in {"mp4", "avi", "mov", "mkv"}
-
-
-ALLOWED_EXTS = {"mp4", "avi", "mov", "mkv", "wav", "mp3", "m4a", "flac"}
-
-app = FastAPI(title="Stuttering Detection API")
+app = FastAPI(
+    title="ASD Screening API",
+    version="1.0.0",
+    description="Vision Transformer-based facial image screening system.",
+)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=False,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# ---------------------------------------------------------------------
+# Load AI Model
+# ---------------------------------------------------------------------
 
-_MODEL = load_model(MODEL_ABS_PATH, DEVICE)
-_PIPELINE = StutterPipeline(model=_MODEL, device=DEVICE, sample_rate=SAMPLE_RATE)
+pipeline = None
 
+try:
+    model = load_model(MODEL_PATH, DEVICE)
+    pipeline = InferencePipeline(model)
+    print("✓ Vision Transformer loaded successfully.")
+
+except FileNotFoundError:
+    print("WARNING: best_model.pth not found.")
+
+except Exception as e:
+    print(f"ERROR loading model: {e}")
+
+    # ---------------------------------------------------------------------
+    # React Frontend
+    # ---------------------------------------------------------------------
+
+FRONTEND_DIST = BACKEND_DIR / "frontend_dist"
+
+if FRONTEND_DIST.exists():
+
+    assets_dir = FRONTEND_DIST / "assets"
+
+    if assets_dir.exists():
+        app.mount(
+            "/assets",
+            StaticFiles(directory=assets_dir),
+            name="assets",
+        )
+
+    @app.get("/", include_in_schema=False)
+    async def frontend():
+        return FileResponse(FRONTEND_DIST / "index.html")
+
+else:
+
+    @app.get("/")
+    def root():
+        return {
+            "application": "ASD Screening API",
+            "status": "running",
+            "model_loaded": pipeline is not None,
+        }
+
+# ---------------------------------------------------------------------
+# Health Check
+# ---------------------------------------------------------------------
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "device": str(_PIPELINE.device)}
+    return {
+        "status": "healthy",
+        "device": str(DEVICE),
+        "model_loaded": pipeline is not None,
+    }
 
+# ---------------------------------------------------------------------
+# Prediction
+# ---------------------------------------------------------------------
 
-@app.post("/infer")
-async def infer(file: UploadFile = File(...)):
-    filename = file.filename or "uploaded"
-    ext = Path(filename).suffix.lower().lstrip(".")
-    if ext not in ALLOWED_EXTS:
+@app.post("/predict")
+async def predict(image: UploadFile = File(...)):
+
+    if pipeline is None:
         raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported file type '.{ext}'. Supported: {sorted(ALLOWED_EXTS)}",
+            status_code=503,
+            detail="Model has not been trained yet.",
         )
 
-    input_tmp: Optional[str] = None
-    audio_tmp: Optional[str] = None
+    if not image.filename:
+        raise HTTPException(
+            status_code=400,
+            detail="No image uploaded.",
+        )
+
+    extension = Path(image.filename).suffix.lower()
+
+    if extension not in SUPPORTED_IMAGE_FORMATS:
+        raise HTTPException(
+            status_code=400,
+            detail="Supported formats: jpg, jpeg, png.",
+        )
 
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as f:
-            input_tmp = f.name
-            content = await file.read()
-            if not content:
-                raise ValueError("Uploaded file is empty.")
-            f.write(content)
+        img = Image.open(image.file).convert("RGB")
+    except Exception:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid image.",
+        )
 
-        audio_path = input_tmp
-        duration_sec: Optional[float] = None
+    result = pipeline.predict(img)
 
-        if _is_video(input_tmp):
-            audio_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
-            duration_sec = extract_audio(input_tmp, audio_tmp)
-            audio_path = audio_tmp
-
-        waveform = load_audio(audio_path, target_sr=SAMPLE_RATE)
-        result = _PIPELINE.run(waveform)
-
-        if duration_sec is not None:
-            result.duration_sec = duration_sec
-
-        return result
-    except HTTPException:
-        raise
-    except (ValueError, FileNotFoundError) as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except RuntimeError as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Inference failed: {e}")
-    finally:
-        for p in [audio_tmp, input_tmp]:
-            if p and os.path.exists(p):
-                try:
-                    os.remove(p)
-                except Exception:
-                    pass
+    return result.model_dump()

@@ -1,48 +1,34 @@
-export const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+const API_URL =
+  import.meta.env.VITE_API_URL || "http://localhost:8000";
 
-export interface WindowResult {
-  start_sec: number
-  end_sec: number
-  label: string
-  confidence: number
-  probs: Record<string, number>
-  syllables: number
+export interface PredictionResult {
+  prediction: string;
+  confidence: number;
+  probabilities: Record<string, number>;
+  disclaimer: string;
 }
 
-export interface InferenceResult {
-  predicted_label: string
-  confidence: number
-  class_probs: Record<string, number>
-  stutter_pct: number
-  fluency_pct: number
-  duration_sec: number
-  total_syllables: number
-  stuttered_syllables: number
-  fluent_syllables: number
-  syllable_stats: Record<string, number>
-  class_durations: Record<string, number>
-  timeline: WindowResult[]
-}
+export async function predictImage(
+  image: File
+): Promise<PredictionResult> {
+  const formData = new FormData();
+  formData.append("image", image);
 
-export async function runInference(file: File): Promise<InferenceResult> {
-  const form = new FormData()
-  form.append('file', file)
+  const response = await fetch(`${API_URL}/predict`, {
+    method: "POST",
+    body: formData,
+  });
 
-  const res = await fetch(`${API_URL}/infer`, {
-    method: 'POST',
-    body: form,
-  })
+  if (!response.ok) {
+    let message = "Prediction failed.";
 
-  if (!res.ok) {
-    let msg = `Request failed (${res.status})`
     try {
-      const data = (await res.json()) as { detail?: string }
-      if (data?.detail) msg = data.detail
-    } catch {
-      // ignore
-    }
-    throw new Error(msg)
+      const error = await response.json();
+      if (error.detail) message = error.detail;
+    } catch {}
+
+    throw new Error(message);
   }
 
-  return (await res.json()) as InferenceResult
+  return response.json();
 }

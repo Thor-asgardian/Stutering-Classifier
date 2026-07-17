@@ -1,11 +1,11 @@
 fastapi
 uvicorn
 torch
-torchaudio
+torchvision
 transformers
-librosa
-soundfile
-imageio-ffmpeg
+pillow
+opencv-python
 numpy
 python-multipart
-pydantic
+scikit-learn
+tqdm

@@ -1,26 +1,66 @@
 # Python
+
 __pycache__/
 *.py[cod]
 *.pyd
 *.so
+
+.venv/
+venv/
+env/
+ENV/
+
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-.venv/
-venv/
+.coverage
+htmlcov/
 
-# Model files (keep local, don't commit)
+# Model Files
+# (Keep trained models local unless intentionally sharing)
+
 *.pt
 *.pth
+*.onnx
+*.ckpt
 
-# Node
-node_modules/
+# Python Build
+
+build/
 dist/
-.vite/
+*.egg-info/
 
-# OS
+# VS Code
+
+.vscode/
+.history/
+
+# Node / React / Vite
+
+node_modules/
+.vite/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Ignore React production build
+frontend/dist/
+
+# TypeScript build cache
+*.tsbuildinfo
+
+# Environment Variables
+
+.env
+.env.*
+!.env.example
+
+# Operating System
+
 .DS_Store
 Thumbs.db
 
 # Logs
+
 *.log
+logs/
